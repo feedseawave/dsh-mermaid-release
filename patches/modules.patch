@@ -1,0 +1,130 @@
+diff --git a/packages/client/modules/src/index.ts b/packages/client/modules/src/index.ts
+index aa0ff5d59d..4c8c9541c1 100644
+--- a/packages/client/modules/src/index.ts
++++ b/packages/client/modules/src/index.ts
+@@ -429,15 +429,27 @@ export class ClientModuleRegistry extends Service {
+     // The id may contain a scope slash. Anything else under /plugins (including
+     // /plugins/events when the HMR row is absent) is an unknown resource.
+     const prefix = '/plugins/'
+-    const mapSuffix = '/client.js.map'
+-    const bundleSuffix = '/client.js'
+-    const isSourceMap = pathname.startsWith(prefix) && pathname.endsWith(mapSuffix)
+-    const suffix = isSourceMap ? mapSuffix : bundleSuffix
+-    const clientPath = pathname.startsWith(prefix) && pathname.endsWith(suffix)
+-      ? this.clientPath(pathname.slice(prefix.length, -suffix.length))
+-      : undefined
+-    const path = clientPath === undefined ? undefined : `${clientPath}${isSourceMap ? '.map' : ''}`
+-    if (path === undefined) {
++    // Static per-package bundle artifacts served beside client.js: the
++    // sourcemap, and package-owned vendor scripts (e.g. a diagram library
++    // a plugin loads on first use through its own <script> element).
++    const artifacts: ReadonlyArray<{ suffix: string; mime: string; file: string }> = [
++      { suffix: '/client.js.map', mime: 'application/json; charset=utf-8', file: '.map' },
++      { suffix: '/client.js', mime: 'text/javascript; charset=utf-8', file: '' },
++      { suffix: '/mermaid.js', mime: 'text/javascript; charset=utf-8', file: 'mermaid.js' },
++    ]
++    const artifact = artifacts.find(({ suffix }) => pathname.startsWith(prefix) && pathname.endsWith(suffix))
++    const clientPath = artifact === undefined
++      ? undefined
++      : this.clientPath(pathname.slice(prefix.length, -artifact.suffix.length))
++    // The bundle artifact is the clientPath itself; suffix artifacts ('.map')
++    // append to it, and named vendor scripts sit beside it in the package's
++    // lib directory.
++    const path = clientPath === undefined || artifact === undefined
++      ? undefined
++      : artifact.file === ''
++        ? clientPath
++        : artifact.file.startsWith('.') ? `${clientPath}${artifact.file}` : join(dirname(clientPath), artifact.file)
++    if (path === undefined || artifact === undefined) {
+       res.writeHead(404)
+       res.end()
+       return
+@@ -445,7 +457,7 @@ export class ClientModuleRegistry extends Service {
+     try {
+       const body = await readFile(path)
+       res.writeHead(200, {
+-        'content-type': isSourceMap ? 'application/json; charset=utf-8' : 'text/javascript; charset=utf-8',
++        'content-type': artifact.mime,
+         'cache-control': 'no-cache',
+       })
+       res.end(body)
+diff --git a/packages/client/modules/tests/node-half.client.spec.ts b/packages/client/modules/tests/node-half.client.spec.ts
+index 9fbe144bcc..b2efebc0e8 100644
+--- a/packages/client/modules/tests/node-half.client.spec.ts
++++ b/packages/client/modules/tests/node-half.client.spec.ts
+@@ -149,4 +149,75 @@ describe('client bundle activation', () => {
+     })
+     expect(body).toBe(map)
+   })
++
++  it('serves the bundle itself from the registered package path', async () => {
++    const packageName = '@fixture/bundle-body'
++    const clientPath = writePackage(packageName)
++    mkdirSync(dirname(clientPath), { recursive: true })
++    const bundle = 'module.exports = {}\n'
++    writeFileSync(clientPath, bundle)
++    const { route } = constructWithRoute([packageName])
++    let status = 0
++    let headers: Record<string, string> | undefined
++    let body = ''
++    const response = {
++      writeHead(nextStatus: number, nextHeaders?: Record<string, string>) {
++        status = nextStatus
++        headers = nextHeaders
++        return response
++      },
++      end(chunk?: Uint8Array) {
++        body = chunk === undefined ? '' : Buffer.from(chunk).toString('utf8')
++        return response
++      },
++    } as unknown as ServerResponse
++
++    await route.handler({
++      method: 'GET',
++      url: `/plugins/${packageName}/client.js`,
++    } as IncomingMessage, response)
++
++    expect(status).toBe(200)
++    expect(headers).toEqual({
++      'content-type': 'text/javascript; charset=utf-8',
++      'cache-control': 'no-cache',
++    })
++    expect(body).toBe(bundle)
++  })
++
++  it('serves a package-owned vendor script (mermaid.js) beside the bundle', async () => {
++    const packageName = '@fixture/vendor-script'
++    const clientPath = writePackage(packageName)
++    mkdirSync(dirname(clientPath), { recursive: true })
++    writeFileSync(clientPath, 'module.exports = {}\n')
++    const vendor = 'globalThis.mermaid = {};\n'
++    writeFileSync(join(dirname(clientPath), 'mermaid.js'), vendor)
++    const { route } = constructWithRoute([packageName])
++    let status = 0
++    let headers: Record<string, string> | undefined
++    let body = ''
++    const response = {
++      writeHead(nextStatus: number, nextHeaders?: Record<string, string>) {
++        status = nextStatus
++        headers = nextHeaders
++        return response
++      },
++      end(chunk?: Uint8Array) {
++        body = chunk === undefined ? '' : Buffer.from(chunk).toString('utf8')
++        return response
++      },
++    } as unknown as ServerResponse
++
++    await route.handler({
++      method: 'GET',
++      url: `/plugins/${packageName}/mermaid.js`,
++    } as IncomingMessage, response)
++
++    expect(status).toBe(200)
++    expect(headers).toEqual({
++      'content-type': 'text/javascript; charset=utf-8',
++      'cache-control': 'no-cache',
++    })
++    expect(body).toBe(vendor)
++  })
+ })

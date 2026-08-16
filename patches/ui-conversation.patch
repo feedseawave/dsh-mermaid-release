@@ -1,0 +1,171 @@
+diff --git a/packages/client/ui-conversation/src/client/chat/AssistantMarkdown.tsx b/packages/client/ui-conversation/src/client/chat/AssistantMarkdown.tsx
+index bb766da778..7a98f77575 100644
+--- a/packages/client/ui-conversation/src/client/chat/AssistantMarkdown.tsx
++++ b/packages/client/ui-conversation/src/client/chat/AssistantMarkdown.tsx
+@@ -13,7 +13,7 @@ import { memo, useMemo } from 'react'
+ import type { ReactNode } from 'react'
+ import type { AssistantBlock } from '@deepseek-ai/dsh-client-runtime/client'
+ import { JsonBlock, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
+-import type { MarkdownFileMentions } from '@deepseek-ai/dsh-client-ui-primitives'
++import type { MarkdownFenceRenderer, MarkdownFileMentions } from '@deepseek-ai/dsh-client-ui-primitives'
+ import { ImageGallery, type ImageLoader } from '@deepseek-ai/dsh-client-ui-attachment'
+ import type { ChatViewSlotProps } from '../contract/slots.ts'
+ import { messageImageLabels } from '../image-labels.ts'
+@@ -29,13 +29,15 @@ export interface AssistantMarkdownProps {
+   loadImage?: ImageLoader
+   /** Resolved prose file mentions for this Assistant's closing turn. */
+   mentions?: MarkdownFileMentions | undefined
++  /** Contributed fence renderer, bridged from the owning view's fenceview slot. */
++  fenceRenderer?: MarkdownFenceRenderer | undefined
+   /** The owning view's locale seat, passed down as a plain prop. */
+   t: ChatViewSlotProps['t']
+ }
+ 
+ /** Reasoning block as the Think variant summary row (figma 39:28304). */
+ export const AssistantMarkdown = memo(function AssistantMarkdown({
+-  blocks, streaming, interrupted, loadImage, mentions, t,
++  blocks, streaming, interrupted, loadImage, mentions, t, fenceRenderer,
+ }: AssistantMarkdownProps) {
+   const imageLoader = loadImage ?? (() => Promise.reject(new Error(t('image.serviceUnavailable'))))
+   // Stable per locale revision (t identity changes on switch): a fresh object
+@@ -62,6 +64,7 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
+             streaming={streaming}
+             codeLabels={codeLabels}
+             fileMentions={mentions}
++            fenceRenderer={fenceRenderer}
+           />,
+         )
+         break
+diff --git a/packages/client/ui-conversation/src/client/chat/AssistantNodeView.tsx b/packages/client/ui-conversation/src/client/chat/AssistantNodeView.tsx
+index 72e8a6ae28..5dc13c98d4 100644
+--- a/packages/client/ui-conversation/src/client/chat/AssistantNodeView.tsx
++++ b/packages/client/ui-conversation/src/client/chat/AssistantNodeView.tsx
+@@ -1,11 +1,13 @@
+ import { memo, useMemo } from 'react'
+-import type { ChatNodeViewProps, TurnTailOwnerProps } from '../contract/slots.ts'
++import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
++import type { MarkdownFenceRenderer } from '@deepseek-ai/dsh-client-ui-primitives'
++import type { ChatNodeViewProps, FenceViewOwnerProps, TurnTailOwnerProps } from '../contract/slots.ts'
+ import { AssistantMarkdown } from './AssistantMarkdown.tsx'
+ 
+ /** Streaming, settled, and interrupted Assistant states share one keyed renderer instance. */
+ export const AssistantNodeView = memo(function AssistantNodeView({
+-  node, useTurnData, openFile, loadImage, fileMentions, t,
+-}: ChatNodeViewProps<'assistant-step'>) {
++  node, useTurnData, openFile, loadImage, fileMentions, t, renderSlot,
++}: ChatNodeViewProps<'assistant-step'> & PropsRenderSlots<'conversation.chat.fenceview'>) {
+   const data = node.data
+   const turn = node.location.kind === 'turn' || node.location.kind === 'step'
+     ? node.location.turn
+@@ -20,6 +22,13 @@ export const AssistantNodeView = memo(function AssistantNodeView({
+     () => owner === undefined ? undefined : fileMentions(owner),
+     [fileMentions, owner],
+   )
++  // Dispatch settled fences to the fenceview seat by language tag; the slot
++  // registry is the language table, and an unclaimed key yields undefined so
++  // MarkdownText keeps its built-in CodeBlock surface.
++  const fenceRenderer = useMemo<MarkdownFenceRenderer>(() => (code, lang) => {
++    const owner: FenceViewOwnerProps = { lang, code }
++    return renderSlot('conversation.chat.fenceview', owner, { entryKey: lang, fallback: undefined })
++  }, [renderSlot])
+   return (
+     <AssistantMarkdown
+       blocks={data.blocks}
+@@ -28,6 +37,7 @@ export const AssistantNodeView = memo(function AssistantNodeView({
+       loadImage={loadImage}
+       mentions={mentions}
+       t={t}
++      fenceRenderer={fenceRenderer}
+     />
+   )
+ })
+diff --git a/packages/client/ui-conversation/src/client/chat/register-node-renderers.ts b/packages/client/ui-conversation/src/client/chat/register-node-renderers.ts
+index ed311e4b74..c779a25b84 100644
+--- a/packages/client/ui-conversation/src/client/chat/register-node-renderers.ts
++++ b/packages/client/ui-conversation/src/client/chat/register-node-renderers.ts
+@@ -19,8 +19,12 @@ export function registerChatNodeRenderers(ctx: Context): void {
+     { name: 'conversation.chat.node', key: 'steering', locale: NS }, UserMessageNodeView))
+   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+     { name: 'conversation.chat.node', key: 'context', locale: NS }, ContextMessageNodeView))
+-  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
+-    { name: 'conversation.chat.node', key: 'assistant-step', locale: NS }, AssistantNodeView))
++  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
++    name: 'conversation.chat.node',
++    key: 'assistant-step',
++    locale: NS,
++    children: { 'conversation.chat.fenceview': { kind: 'keyed', scope: 'session' } },
++  }, AssistantNodeView))
+   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+     name: 'conversation.chat.node',
+     key: 'command',
+diff --git a/packages/client/ui-conversation/src/client/contract/slots.ts b/packages/client/ui-conversation/src/client/contract/slots.ts
+index 21259146a7..031ba0e3f3 100644
+--- a/packages/client/ui-conversation/src/client/contract/slots.ts
++++ b/packages/client/ui-conversation/src/client/contract/slots.ts
+@@ -92,6 +92,14 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
+      * registration, and a domain upgrades by registering one row component.
+      */
+     'conversation.chat.commandview': { kind: 'keyed'; scope: 'session'; owner: CommandRowOwnerProps }
++    /**
++     * Per-language fence/diagram hole for settled assistant markdown, keyed
++     * on the fence's normalized language tag (e.g. 'mermaid'). Declared by
++     * the assistant-step renderer; a registrant owns how one fence language
++     * renders, replacing the plain CodeBlock surface. An unclaimed key keeps
++     * the CodeBlock, so registering is purely additive.
++     */
++    'conversation.chat.fenceview': { kind: 'keyed'; scope: 'session'; owner: FenceViewOwnerProps }
+     /**
+      * The completed Turn Node's extension chain, rendered before that Node's
+      * IconActions. Entries derive a match from the engine-owned Turn and
+@@ -396,6 +404,17 @@ export interface CommandRowOwnerProps {
+ /** Full props of a registered command-row component. */
+ export type CommandRowProps = PropsRuntime<'conversation.chat.commandview'>
+ 
++/** Owner currency of one fence-view render: the settled fence's normalized language and source. */
++export interface FenceViewOwnerProps {
++  /** Normalized fence language tag (grammar-id prefix of the info string), e.g. 'mermaid'. */
++  lang: string
++  /** Fence source with the pipeline's synthetic trailing newline (display trims it). */
++  code: string
++}
++
++/** Full props of a registered fence-view component. */
++export type FenceViewProps = PropsRuntime<'conversation.chat.fenceview'> & PropsLocale<'conversation'>
++
+ /**
+  * Base props of a conversation view entry: the framework standard kit for the
+  * session-scope 'conversation.view' slot (useSession narrowed to the
+diff --git a/packages/client/ui-conversation/src/client/index.ts b/packages/client/ui-conversation/src/client/index.ts
+index 0574aa8375..0154ab4bc1 100644
+--- a/packages/client/ui-conversation/src/client/index.ts
++++ b/packages/client/ui-conversation/src/client/index.ts
+@@ -33,6 +33,7 @@ export type {
+   ComposerAttachment, ComposerChainProps, ConversationInjected,
+   ConversationSessionHeaderInjected, ConversationSessionInjected, ConversationSlotProps, ConvViewOwnerProps,
+   ConvViewProps, DetailsInjected, DetailsSlotProps, DetailsToolOwnerProps, EmptyWorkspaceOwnerProps,
++  FenceViewOwnerProps, FenceViewProps,
+   TurnTailOwnerProps, UseChatNodeTurnData,
+ } from './contract/slots.ts'
+ // Export discipline: packages/client/AGENTS.md.
+diff --git a/packages/client/ui-conversation/tests/chat-view.client.spec.tsx b/packages/client/ui-conversation/tests/chat-view.client.spec.tsx
+index 360b589bdc..67d8130aa1 100644
+--- a/packages/client/ui-conversation/tests/chat-view.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/chat-view.client.spec.tsx
+@@ -176,6 +176,8 @@ function makeHarness(init?: Partial<ConversationSnapshot>) {
+   }> = []
+   const renderCommandSlot = ((_key: string, _owner: object, opts?: { fallback?: React.ReactNode }) =>
+     opts?.fallback ?? null) as unknown as React.ComponentProps<typeof CommandNodeView>['renderSlot']
++  const renderFenceSlot = ((_key: string, _owner: object, opts?: { fallback?: React.ReactNode }) =>
++    opts?.fallback ?? null) as unknown as React.ComponentProps<typeof AssistantNodeView>['renderSlot']
+   const renderTurnTail = ((_key: string, _owner: object) => null) as unknown as
+     React.ComponentProps<typeof TurnTailNodeView>['renderSlotChain']
+   const renderTurnTailSlot = (() => null) as unknown as
+@@ -203,7 +205,7 @@ function makeHarness(init?: Partial<ConversationSnapshot>) {
+       case 'context':
+         return <ContextMessageNodeView {...nodeProps<'context'>()} />
+       case 'assistant-step':
+-        return <AssistantNodeView {...nodeProps<'assistant-step'>()} />
++        return <AssistantNodeView {...nodeProps<'assistant-step'>()} renderSlot={renderFenceSlot} SessionProvider={props.SessionProvider} />
+       case 'command':
+         return (
+           <CommandNodeView

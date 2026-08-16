@@ -1,0 +1,16 @@
+{
+  "name": "dsh-profile-my",
+  "private": true,
+  "dependencies": {
+    "@deepseek-ai/dsh-base": "0.1.0-rc.6",
+    "@dsh-mermaid-renderer/dsh-web-app-mermaid": "0.1.0-rc.6-mermaid.10"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@dsh-mermaid-renderer/dsh-web-app-mermaid"
+      ]
+    }
+  }
+}

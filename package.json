@@ -1,0 +1,34 @@
+{
+  "name": "dsh-mermaid-release",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0-rc.6-mermaid.10",
+  "packageManager": "pnpm@11.7.0",
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  },
+  "scripts": {
+    "sync": "node sync.mjs",
+    "rewrite": "node rewrite.mjs",
+    "typecheck": "tsc -b --force packages/client/ui-primitives packages/client/ui-conversation packages/client/ui-mermaid packages/client/modules && tsc -p packages/bundle/web-app",
+    "bundle": "pnpm --dir packages/client/ui-primitives exec tsdown && pnpm --filter @dsh-mermaid-renderer/dsh-client-ui-conversation run bundle && pnpm --filter @dsh-mermaid-renderer/dsh-client-modules run bundle && pnpm --filter @dsh-mermaid-renderer/dsh-client-ui-mermaid run bundle && pnpm --dir packages/bundle/web-app exec tsdown -c ../../tools/web-app.tsdown.config.ts"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/cordis-plugin-loader": "^1.0.2",
+    "@deepseek-ai/dsh-attachment": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-invariants": "^0.1.0-rc.6",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/react": "~18.3.1",
+    "jsdom": "29.1.1",
+    "lightningcss": "^1.32.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "tsdown": "^0.22.2",
+    "typescript": "^6.0.3",
+    "use-sync-external-store": "1.2.0",
+    "vite-tsconfig-paths": "^6.1.1",
+    "vitest": "4.1.8"
+  }
+}

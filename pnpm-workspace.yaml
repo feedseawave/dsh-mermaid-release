@@ -1,0 +1,17 @@
+packages:
+  - 'packages/client/ui-primitives'
+  - 'packages/client/ui-conversation'
+  - 'packages/client/modules'
+  - 'packages/client/ui-mermaid'
+  - 'packages/bundle/web-app'
+  - 'apps/web'
+  # Build-only sources (seed/platform packages): linked so their own
+  # dependencies install; never published.
+  - 'packages/client/web'
+  - 'packages/client/web-react'
+  - 'packages/client/ui-slots'
+  - 'packages/client/ui-attachment'
+  - 'packages/client/schema-form'
+allowBuilds:
+  koffi: true
+  esbuild: true

@@ -1,0 +1,87 @@
+import { jsx as _jsx } from "react/jsx-runtime";
+/**
+ * MermaidBlock: renders one settled mermaid fence as an SVG figure inside
+ * the shared CodeBlock chrome (language banner + copy stay, so the authored
+ * source remains accessible). The mermaid bundle is a package-owned vendor
+ * script (`lib/mermaid.js`, the upstream UMD build) served beside this
+ * plugin's client bundle at `/plugins/<id>/mermaid.js`; the block injects one
+ * shared <script> element on first use, so the multi-megabyte library stays
+ * out of every boot path until the first diagram appears. The strict
+ * security level keeps model-authored diagrams inert: links are sanitized,
+ * scripts and click payloads are dropped. Parse failures and the in-flight
+ * load keep the plain CodeBlock surface.
+ */
+import { useEffect, useState } from 'react';
+import { CodeBlock } from '@deepseek-ai/dsh-client-ui-primitives';
+import css from './MermaidBlock.module.css';
+/** The vendor script endpoint beside this plugin's client bundle. */
+const VENDOR_SCRIPT = '/plugins/@dsh-mermaid-renderer/dsh-client-ui-mermaid/mermaid.js';
+/** One shared script-loading promise: the script tag is injected once per page. */
+let mermaidReady;
+/**
+ * Load the mermaid vendor script through one shared <script> element, or
+ * return the already-present global (a test environment may preinstall it).
+ */
+function loadMermaidScript() {
+    if (window.mermaid !== undefined)
+        return Promise.resolve(window.mermaid);
+    mermaidReady ??= new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = VENDOR_SCRIPT;
+        script.onload = () => {
+            if (window.mermaid === undefined) {
+                reject(new Error('mermaid vendor script loaded without exposing window.mermaid'));
+            }
+            else {
+                resolve(window.mermaid);
+            }
+        };
+        script.onerror = () => {
+            reject(new Error(`failed to load mermaid vendor script ${VENDOR_SCRIPT}`));
+        };
+        document.head.appendChild(script);
+    });
+    return mermaidReady;
+}
+// Per-render ids keep SVG element ids unique across every figure on the page.
+let renderSeq = 0;
+/**
+ * The fenceview renderer for the 'mermaid' language key.
+ * @param props - The fenceview owner share: normalized language and source.
+ */
+export function MermaidBlock({ lang, code }) {
+    const trimmed = code.endsWith('\n') ? code.slice(0, -1) : code;
+    const [figure, setFigure] = useState(undefined);
+    useEffect(() => {
+        let alive = true;
+        // A changed source re-enters loading: drop the stale figure immediately.
+        setFigure(undefined);
+        void loadMermaidScript()
+            .then((mermaid) => {
+            // startOnLoad: the document is not a mermaid mount point here.
+            // Strict is the untrusted-output posture (see the untrusted-input
+            // policy in ui-primitives): the SVG mermaid returns is inert.
+            // suppressErrorRendering makes invalid diagrams reject instead of
+            // painting an error figure, so the fallback keeps the authored
+            // source visible.
+            mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true });
+            return mermaid.render(`dsh-mermaid-${renderSeq++}`, trimmed);
+        })
+            .then(({ svg }) => {
+            if (alive)
+                setFigure(svg);
+        })
+            .catch(() => {
+            // Only diagram parse errors and the script-load failure land here;
+            // the figure stays undefined, so the CodeBlock surface remains. The
+            // authored source is the actionable view, not mermaid's diagnostic.
+        });
+        return () => { alive = false; };
+    }, [trimmed]);
+    if (figure === undefined) {
+        // Loading or failed: the shared code surface with the authored source.
+        return _jsx(CodeBlock, { code: code, lang: lang });
+    }
+    return (_jsx(CodeBlock, { code: code, lang: lang, children: _jsx("div", { className: css.figure, dangerouslySetInnerHTML: { __html: figure } }) }));
+}
+//# sourceMappingURL=MermaidBlock.js.map

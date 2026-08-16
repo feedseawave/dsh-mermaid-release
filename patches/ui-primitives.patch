@@ -1,0 +1,251 @@
+diff --git a/packages/client/ui-primitives/src/index.ts b/packages/client/ui-primitives/src/index.ts
+index 05baf26f8d..39f9b80683 100644
+--- a/packages/client/ui-primitives/src/index.ts
++++ b/packages/client/ui-primitives/src/index.ts
+@@ -43,7 +43,7 @@ export { CodeBlock } from './markdown/CodeBlock.tsx'
+ export type { CodeBlockProps } from './markdown/CodeBlock.tsx'
+ export { JsonBlock } from './markdown/JsonBlock.tsx'
+ export { MarkdownText } from './markdown/MarkdownText.tsx'
+-export type { MarkdownCodeLabels, MarkdownFileMentions } from './markdown/MarkdownText.tsx'
++export type { MarkdownCodeLabels, MarkdownFenceRenderer, MarkdownFileMentions } from './markdown/MarkdownText.tsx'
+ export { MessageText } from './markdown/MessageText.tsx'
+ export { extractMarkdownPlainText } from './markdown/plain-text.ts'
+ export type { MarkdownPlainTextMode, MarkdownPlainTextOptions } from './markdown/plain-text.ts'
+diff --git a/packages/client/ui-primitives/src/markdown/CodeBlock.tsx b/packages/client/ui-primitives/src/markdown/CodeBlock.tsx
+index 7f2fb1caf7..e11f3277e6 100644
+--- a/packages/client/ui-primitives/src/markdown/CodeBlock.tsx
++++ b/packages/client/ui-primitives/src/markdown/CodeBlock.tsx
+@@ -5,6 +5,7 @@
+ // deepsuite `@deepseek/md` code blocks; token colors stay on `--shiki-*`.
+ 
+ import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from 'react'
++import type { ReactNode } from 'react'
+ import clsx from 'clsx'
+ import { writeClipboard } from '../clipboard.ts'
+ import { grammarLoadCount, highlightToHtml, subscribeGrammarLoaded } from './highlight.ts'
+@@ -21,14 +22,18 @@ export interface CodeBlockProps {
+   copyLabel?: string | undefined
+   /** Copy-button label during the post-copy confirmation window. */
+   copiedLabel?: string | undefined
++  /** Contributed body replacing the code surface (banner and copy stay); diagram renderers inject their figure here. */
++  children?: ReactNode | undefined
+ }
+ 
+-export function CodeBlock({ code, lang, className, copyLabel = '复制', copiedLabel = '复制成功' }: CodeBlockProps) {
++export function CodeBlock({ code, lang, className, copyLabel = '复制', copiedLabel = '复制成功', children }: CodeBlockProps) {
+   const trimmed = code.endsWith('\n') ? code.slice(0, -1) : code
+   // Re-render when a lazy grammar finishes loading, so a fence that showed plain
+   // text while its language's grammar imported picks up highlighting. The
+   // snapshot value is opaque; only its change across renders drives the memo.
+   const loaded = useSyncExternalStore(subscribeGrammarLoaded, grammarLoadCount, grammarLoadCount)
++  // With a contributed body the highlight never runs; languages outside the
++  // shiki allowlist short-circuit to undefined at table-lookup cost anyway.
+   const html = useMemo(() => highlightToHtml(trimmed, lang), [trimmed, lang, loaded])
+   const rootRef = useRef<HTMLDivElement>(null)
+   const [copied, setCopied] = useState(false)
+@@ -45,7 +50,7 @@ export function CodeBlock({ code, lang, className, copyLabel = '复制', copiedL
+     })
+   }, [copied, trimmed])
+ 
+-  const body = html === undefined
++  const body = children ?? (html === undefined
+     ? (
+       <pre className={css.plain}><code>{trimmed}</code></pre>
+     )
+@@ -54,7 +59,7 @@ export function CodeBlock({ code, lang, className, copyLabel = '复制', copiedL
+   // HTML passes through), the sanctioned innerHTML consumption path per
+   // shiki's own docs.
+       <div dangerouslySetInnerHTML={{ __html: html }} />
+-    )
++    ))
+ 
+   return (
+     <div ref={rootRef} className={clsx(css.block, 'md-code-block', className)}>
+diff --git a/packages/client/ui-primitives/src/markdown/MarkdownText.tsx b/packages/client/ui-primitives/src/markdown/MarkdownText.tsx
+index 4dff78d784..1a43c18f0a 100644
+--- a/packages/client/ui-primitives/src/markdown/MarkdownText.tsx
++++ b/packages/client/ui-primitives/src/markdown/MarkdownText.tsx
+@@ -19,17 +19,18 @@ import {
+   collectReferenceTargets, createReferenceTargets, renderBlocks, renderFootnoteSection,
+   wrapBlockChildren,
+ } from './render.tsx'
+-import type { MarkdownCodeLabels, MarkdownFileMentions, MarkdownRenderContext, ReferenceTargets } from './render.tsx'
++import type { MarkdownCodeLabels, MarkdownFenceRenderer, MarkdownFileMentions, MarkdownRenderContext, ReferenceTargets } from './render.tsx'
+ import 'katex/dist/katex.min.css'
+ import css from './MarkdownText.module.css'
+ 
+-export type { MarkdownCodeLabels, MarkdownFileMentions } from './render.tsx'
++export type { MarkdownCodeLabels, MarkdownFenceRenderer, MarkdownFileMentions } from './render.tsx'
+ 
+ /** One settled full render: parse with math, resolve references, append the footnote section. */
+ function renderSettled(
+   text: string,
+   codeLabels: MarkdownCodeLabels | undefined,
+   fileMentions: MarkdownFileMentions | undefined,
++  fenceRenderer: MarkdownFenceRenderer | undefined,
+ ): ReactNode[] {
+   const root = parseGfmWithMath(text)
+   const targets = createReferenceTargets()
+@@ -38,6 +39,7 @@ function renderSettled(
+     streaming: false,
+     codeLabels,
+     fileMentions,
++    fenceRenderer,
+     targets,
+     footnoteOrder: [],
+     footnoteCounts: new Map(),
+@@ -102,6 +104,9 @@ class StreamingRenderer {
+         streaming: true,
+         codeLabels: this.codeLabels,
+         fileMentions: undefined,
++        // Streaming fences never consult the contributed renderer: the source
++        // is not final, so the cached elements must stay renderer-free.
++        fenceRenderer: undefined,
+         targets: frameTargets,
+         footnoteOrder: this.frozenFootnoteOrder,
+         footnoteCounts: this.frozenFootnoteCounts,
+@@ -120,6 +125,7 @@ class StreamingRenderer {
+       streaming: true,
+       codeLabels: this.codeLabels,
+       fileMentions: undefined,
++      fenceRenderer: undefined,
+       targets: frameTargets,
+       footnoteOrder: [...this.frozenFootnoteOrder],
+       footnoteCounts: new Map(this.frozenFootnoteCounts),
+@@ -148,29 +154,33 @@ class StreamingRenderer {
+  * links inline-code tokens its resolver recognizes as real files; this is
+  * the single streaming gate — it applies to settled renders only, because a
+  * streaming message's vocabulary is not final and frozen cached elements
+- * must not bake in handlers that could go stale.
++ * must not bake in handlers that could go stale. `fenceRenderer` dispatches
++ * settled fences by language to contributed diagram renderers; it applies to
++ * settled fences only for the same reason — a streaming fence's source is
++ * not final.
+  * @returns A GFM document with TeX math rendered through KaTeX; raw HTML,
+  * relative links, and unsafe protocols are disabled, while absolute HTTP(S)
+  * images render directly.
+  */
+-export const MarkdownText = memo(function MarkdownText({ text, streaming = false, codeLabels, fileMentions }: {
++export const MarkdownText = memo(function MarkdownText({ text, streaming = false, codeLabels, fileMentions, fenceRenderer }: {
+   text: string
+   streaming?: boolean
+   codeLabels?: MarkdownCodeLabels | undefined
+   fileMentions?: MarkdownFileMentions | undefined
++  fenceRenderer?: MarkdownFenceRenderer | undefined
+ }) {
+   const streamRef = useRef<StreamingRenderer | null>(null)
+   const streamLabelsRef = useRef<MarkdownCodeLabels | undefined>(codeLabels)
+   const children = useMemo(() => {
+     if (!streaming) {
+       streamRef.current = null
+-      return renderSettled(text, codeLabels, fileMentions)
++      return renderSettled(text, codeLabels, fileMentions, fenceRenderer)
+     }
+     if (streamRef.current === null || streamLabelsRef.current !== codeLabels) {
+       streamRef.current = new StreamingRenderer(codeLabels)
+       streamLabelsRef.current = codeLabels
+     }
+     return streamRef.current.render(text)
+-  }, [text, streaming, codeLabels, fileMentions])
++  }, [text, streaming, codeLabels, fileMentions, fenceRenderer])
+   return <div className={css.markdown}>{children}</div>
+ })
+diff --git a/packages/client/ui-primitives/src/markdown/render.tsx b/packages/client/ui-primitives/src/markdown/render.tsx
+index 452e0fc475..d3264e8c3d 100644
+--- a/packages/client/ui-primitives/src/markdown/render.tsx
++++ b/packages/client/ui-primitives/src/markdown/render.tsx
+@@ -114,6 +114,22 @@ export interface MarkdownFileMentions {
+   resolve(value: string): { open: () => void; label: string; title: string } | undefined
+ }
+ 
++/**
++ * Fence renderer contributed by the owner (a UI plugin registering into the
++ * fenceview slot) for settled fences whose language has no built-in branch.
++ * The owner dispatches by language itself — its slot registry is the language
++ * table — so this renderer sees every settled fence and declines the ones it
++ * does not own by returning undefined.
++ * @param code - The fence source with the pipeline's synthetic trailing
++ * newline, exactly as CodeBlock receives it (display trims it).
++ * @param lang - The normalized language tag (grammar-id prefix of the info
++ * string), e.g. 'mermaid'.
++ * @returns The rendered surface replacing the CodeBlock body, or undefined
++ * to keep the built-in branches; the owner remains responsible for
++ * untrusted-input safety of any HTML it injects.
++ */
++export type MarkdownFenceRenderer = (code: string, lang: string) => ReactNode | undefined
++
+ /**
+  * One render pass's state: immutable options and targets plus the footnote
+  * numbering accumulated in document order while references render.
+@@ -125,6 +141,8 @@ export interface MarkdownRenderContext {
+   readonly codeLabels: MarkdownCodeLabels | undefined
+   /** Inline-code file mentions; absent wherever no opener vocabulary exists. */
+   readonly fileMentions: MarkdownFileMentions | undefined
++  /** Contributed fence renderer; consulted for settled fences ahead of the built-in branches. */
++  readonly fenceRenderer: MarkdownFenceRenderer | undefined
+   /** Inside an anchor's children: interactive mentions must not nest there. */
+   readonly inLink?: boolean
+   /** Reference targets visible to this pass. */
+@@ -310,6 +328,17 @@ function renderCode(node: Md.Code, key: Key, context: MarkdownRenderContext): Re
+   // The replaced pipeline recovered the grammar id from the hast class with
+   // /language-([\w-]+)/, which truncates at the first non-word character.
+   const lang = language === undefined ? undefined : /^[\w-]+/.exec(language)?.[0]
++  if (!context.streaming && lang !== undefined) {
++    // A contributed fence renderer may replace the CodeBlock surface; the
++    // owner dispatches by language through its fenceview slot registry, so a
++    // plugin owns a diagram language end to end. Deliberately ahead of the
++    // built-in math branch: declining nothing there means 'math' stays KaTeX
++    // while a renderer that answers for 'math' overrides it.
++    const contributed = context.fenceRenderer?.(`${node.value}\n`, lang)
++    if (contributed !== undefined) {
++      return <Fragment key={key}>{contributed}</Fragment>
++    }
++  }
+   if (!context.streaming && lang === 'math') {
+     // ```math fences render as display TeX once settled (rehype-katex parity);
+     // its text extraction saw the code block's trailing newline.
+diff --git a/packages/client/ui-primitives/tests/code-block.client.spec.tsx b/packages/client/ui-primitives/tests/code-block.client.spec.tsx
+index 9179ec9797..2a8b3f7b0c 100644
+--- a/packages/client/ui-primitives/tests/code-block.client.spec.tsx
++++ b/packages/client/ui-primitives/tests/code-block.client.spec.tsx
+@@ -153,4 +153,28 @@ describe('CodeBlock', () => {
+     expect(absent.getByRole('button', { name: '复制' })).toBeTruthy()
+     expect(absent.queryByRole('button', { name: '复制成功' })).toBeNull()
+   })
++
++  it('renders contributed children instead of the code body, keeping the banner', () => {
++    const view = render(<CodeBlock code={'graph TD;\n'} lang="mermaid"><div data-testid="figure" /></CodeBlock>)
++    expect(view.getByTestId('figure')).toBeTruthy()
++    expect(view.container.querySelector('pre')).toBeNull()
++    expect(screen.getByText('mermaid')).toBeTruthy()
++    expect(screen.getByRole('button', { name: '复制' })).toBeTruthy()
++  })
++
++  it('copies the raw source when contributed children replace the body', async () => {
++    vi.useFakeTimers()
++    const writeText = vi.fn().mockResolvedValue(undefined)
++    Object.defineProperty(navigator, 'clipboard', {
++      configurable: true,
++      value: { writeText },
++    })
++    render(<CodeBlock code={'graph TD;\n'} lang="mermaid"><div /></CodeBlock>)
++    fireEvent.click(screen.getByRole('button', { name: '复制' }))
++    expect(writeText).toHaveBeenCalledWith('graph TD;')
++    await act(async () => {
++      await Promise.resolve()
++    })
++    expect(screen.getByRole('button', { name: '复制成功' })).toBeTruthy()
++  })
+ })
+diff --git a/packages/client/ui-primitives/tests/markdown-render-units.client.spec.tsx b/packages/client/ui-primitives/tests/markdown-render-units.client.spec.tsx
+index 48f59c7479..3e7d5f3806 100644
+--- a/packages/client/ui-primitives/tests/markdown-render-units.client.spec.tsx
++++ b/packages/client/ui-primitives/tests/markdown-render-units.client.spec.tsx
+@@ -21,6 +21,7 @@ function makeContext(): MarkdownRenderContext {
+     streaming: false,
+     codeLabels: undefined,
+     fileMentions: undefined,
++    fenceRenderer: undefined,
+     targets: createReferenceTargets(),
+     footnoteOrder: [],
+     footnoteCounts: new Map(),

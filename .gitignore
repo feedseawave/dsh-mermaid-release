@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+
+# Sync/build intermediates
+.sync-tmp/
+.sync-state/
+*.tsbuildinfo
+
+# Local-only artifacts (registry storage, packed tarballs, scratch)
+.scratch/
+storage/
+out/
+*.tgz
+verdaccio.log
+
+# Credentials
+htpasswd
+
+# Local runtime state
+consumer-test/.dsh-home/profiles/*/node_modules/
+consumer-test/.dsh-home/sessions/
+consumer-test/.dsh-home/storages/
+consumer-test/.dsh-home/.credentials.yaml
+consumer-test/.dsh-home/.anonymous-user-id
+consumer-test/.dsh-home/settings.yaml
+
+# Harness test suites (not part of this release project)
+**/tests/
+**/stress-tests/
+
+# Harness build-only sources (synced from deepseek-harness; not published)
+packages/client/web/
+packages/client/web-react/
+packages/client/ui-slots/
+packages/client/ui-attachment/
+packages/client/schema-form/
+packages/client/tsdown.client.ts
+
+# Fork package sources (lib/ is the shipped artifact; src is synced from harness)
+packages/client/ui-conversation/src/
+packages/client/ui-primitives/src/
+packages/client/modules/src/
+
+# Non-English docs (repo is English-only)
+**/README.zh.md
+**/README.i18n.yaml
