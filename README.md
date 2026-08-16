@@ -50,36 +50,6 @@ profile `package.json` (bundle replaces the official web-app):
 After that, ```` ```mermaid ```` fences in assistant messages render as SVG;
 invalid mermaid source stays as a code block.
 
-## Publishing
-
-```bash
-# 1. sync sources from harness (optional, when rebasing the forks)
-node sync.mjs
-
-# 2. generate publish manifests
-#    MUST use --publish: local mode emits workspace:^ which npm publish does not convert
-node rewrite.mjs --publish
-
-# 3. check the VERSION constant at the top of rewrite.mjs, bump if needed
-
-# 4. publish to npmjs (requires npm login)
-for p in packages/client/modules packages/client/ui-conversation \
-         packages/client/ui-mermaid packages/bundle/web-app; do
-  npm publish "$p" --tag next
-done
-# web-frontend is a Vite build; publishing the directory hangs, use a prebuilt tarball:
-mkdir -p .scratch/wf && cp -r apps/web/dist .scratch/wf/package/dist \
-  && cp apps/web/package.json .scratch/wf/package/package.json
-cd .scratch/wf && tar -czf ../dsh-web-frontend-0.1.0-rc.6-mermaid.X.tgz package
-npm publish ../dsh-web-frontend-0.1.0-rc.6-mermaid.X.tgz --tag next
-```
-
-### Notes
-
-- Every version bump must also update the `minimumReleaseAgeExclude` list in the consumer verification environment (pnpm supply-chain policy).
-- This repo's `.npmrc` (`registry=http://localhost:4873/` + `auth-type=legacy`) isolates the workflow from machine-global npm config (`auth-type=web`, `registry=npmmirror`). Do not remove it.
-- To publish to npmjs use `npm publish --registry https://registry.npmjs.org/`.
-
 ## Verification
 
 The consumer environment lives in `consumer-test/.dsh-home/profiles/my/` (its `.npmrc` uses npmmirror because this machine cannot reach npmjs directly).
