@@ -1,4 +1,4 @@
-# dsh-mermaid-release
+# dsh-mermaid-renderer
 
 Mermaid diagram rendering for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH). The packages below are forks of the DSH web UI packages (the npm releases lack the mermaid pieces) and are published under the `@dsh-mermaid-renderer` scope.
 
