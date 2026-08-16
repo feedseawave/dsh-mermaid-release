@@ -44,3 +44,6 @@ packages/client/modules/src/
 # Non-English docs (repo is English-only)
 **/README.zh.md
 **/README.i18n.yaml
+
+# npmjs-sourced verification environment (local only)
+consumer-npm-test/
